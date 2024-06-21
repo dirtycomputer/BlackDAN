@@ -177,7 +177,7 @@ def mutation(prompt, mutation_rate=0.1):
 
 
 @timeit
-def genetic_algorithm(prototype_prompt, harmful_question, population_size=20, generations=4, mutation_rate=0.1):
+def genetic_algorithm(prototype_prompt, harmful_question, population_size=100, generations=4, mutation_rate=0.1):
     population = initialize_population(prototype_prompt, population_size)
     for generation in range(generations):
         population = sorted(population, key=lambda x: evaluate_fitness(x, harmful_question)["fitness"], reverse=True)
