@@ -81,8 +81,8 @@ def initialize_population(prototype_prompt, population_size):
 @timeit
 def evaluate_fitness(prototype_prompt, harmful_question, device=0):
     prompt = f"{prototype_prompt} {harmful_question}"
-    response = local_client.chat.completions.create(
-        model="vicuna-7b-v1.5",
+    response = ali_client.chat.completions.create(
+        model="qwen2-0.5b-instruct",
         messages=[
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt}
