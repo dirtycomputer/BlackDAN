@@ -30,7 +30,7 @@ def get_revise(prototype_prompt):
             {"role": "system", "content": "You're a helpful assistant. Only response the part I need."},
             {"role": "user", "content": f"Please revise the following sentence with no change to its length and only output the revised version: {prototype_prompt}"}
         ]
-    ).choices[0].message.content.strip()
+    ).choices[0].message.content.strip().split(":")[-1]
     return response
 
 
