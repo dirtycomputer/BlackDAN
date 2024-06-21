@@ -1,4 +1,6 @@
-name: CI/CD Pipeline
+disabled: true
+
+name: blackdan
 
 on:
   push:
