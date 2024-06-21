@@ -72,7 +72,7 @@ def initialize_population(prototype_prompt, population_size):
 def evaluate_fitness(prototype_prompt, harmful_question, device=0):
     prompt = f"{prototype_prompt} {harmful_question}"
     response = yi_client.chat.completions.create(
-        model="yi-large",
+        model="yi-spark",
         messages=[
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": prompt}
