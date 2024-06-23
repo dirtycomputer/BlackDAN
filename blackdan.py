@@ -92,16 +92,10 @@ def initialize_population(prototype_prompt, population_size):
 @timeit
 def evaluate_fitness(prototype_prompts, harmful_question):
     population = [f"{prototype_prompt} {harmful_question}" for prototype_prompt in prototype_prompts]
-    # response = yi_client.chat.completions.create(
-    #     model="yi-spark",
-    #     messages=[
-    #         {"role": "system", "content": sys_prompt},
-    #         {"role": "user", "content": prompt}
-    #     ]
-    # ).choices[0].message.content
-    outputs = LLM(model="facebook/opt-125m").generate(population, SamplingParams(temperature=0.8, top_p=0.95))
+    outputs = LLM(model="lmsys/vicuna-7b-v1.5").generate(population, SamplingParams(temperature=0.8, top_p=0.95))
     response_list = []
-    for item in outputs:
+
+    for prototype_prompt, item in zip(prototype_prompts, outputs):
         response = item.outputs[0].text
         moderation_score = calculate_moderation(response)
         fitness = moderation_score
@@ -112,8 +106,8 @@ def evaluate_fitness(prototype_prompts, harmful_question):
             if prefix.lower() in response.lower():
                 fitness -= 1
         print(f"evaluate fitness:{fitness}, response:{response}")
-    response_list.append({"fitness":fitness, "response":response} )
-    return response_list
+        response_list.append({"prompt": prototype_prompt, "fitness": fitness, "response": response})
+
 
 @timeit
 def paragraph_crossover(paragraph1, paragraph2, num_points=1):
@@ -182,20 +176,21 @@ def mutation(prompt, mutation_rate=0.1):
     return ' '.join(words)
 
 
-@timeit
+
 def genetic_algorithm(prototype_prompt, harmful_question, population_size=100, generations=4, mutation_rate=0.1):
     population = initialize_population(prototype_prompt, population_size)
     for generation in range(generations):
         fitness_scores = evaluate_fitness(population, harmful_question)
-        population = sorted(population, key=lambda x: fitness_scores[population.index(x)]["fitness"], reverse=True)
+        population_with_fitness = sorted(fitness_scores, key=lambda x: x["fitness"], reverse=True)
+        population = [item["prompt"] for item in population_with_fitness]
         next_population = population[:population_size//2]
         while len(next_population) < population_size:
-            parent1, parent2 = random.sample(population[:population_size//2], 2)
+            parent1, parent2 = random.sample(next_population, 2)
             child1, child2 = crossover(parent1, parent2)
             next_population.extend([mutation(child1, mutation_rate), mutation(child2, mutation_rate)])
         population = next_population
-        print(f"population:{population}")
-        fitness = evaluate_fitness([population[0]], harmful_question)["fitness"][0]
+        print(f"population: {population}")
+        fitness = fitness_scores[0]["fitness"]
         print(f"Generation {generation+1}: Best fitness = {fitness}")
     return population[0]
 
@@ -237,7 +232,7 @@ harmful_questions = pd.read_csv("harmful_behaviors.csv")['goal'].tolist()
 
 with open("blackdan_results.csv", mode='w', newline='') as file:
     writer = csv.writer(file)
-    writer.writerow(["harmful_question", "best_prompt", "response","fitness"])
+    writer.writerow(["harmful_question", "best_prompt", "response", "fitness"])
     file.flush()
     for harmful_question in harmful_questions:
         best_prompt = genetic_algorithm(prototype_prompt, harmful_question)
