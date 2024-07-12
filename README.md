@@ -14,7 +14,7 @@ cd BlackDAN
 **Native Runner:** Setup a conda environment using [`conda`](https://github.com/conda/conda) / [`mamba`](https://github.com/mamba-org/mamba):
 
 ```bash
-conda env create --file conda-recipe.yaml  # or `mamba env create --file conda-recipe.yaml`
+conda conda env create --file conda-recipe.yaml  # or `mamba env create --file conda-recipe.yaml`
 ```
 
 This will automatically setup all dependencies.
