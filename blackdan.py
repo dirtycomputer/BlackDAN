@@ -1,4 +1,5 @@
 import argparse
+import copy
 import random
 from openai import OpenAI
 import nltk
@@ -13,52 +14,25 @@ from times import timeit
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 import re
+from client_key import *
 
 
 nltk.download('wordnet')
 
 parser = argparse.ArgumentParser(description="Specify GPU for models")
 parser.add_argument("--gpu", type=int, default=1, help="GPU ID")
-parser.add_argument("--split", type=int, default=4, help="GPU ID")
+parser.add_argument("--split", type=int, default=1, help="GPU ID")
 args = parser.parse_args()
-
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-ALI_API_KEY = os.getenv('ALI_API_KEY')
-LLAMA_API_KEY = os.getenv('LLAMA_API_KEY')
-YI_API_KEY = os.getenv('YI_API_KEY')
 
 os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu)
 
-yi_client = OpenAI(
-    api_key=YI_API_KEY, 
-    base_url="https://api.lingyiwanwu.com/v1",
-)
-
-ali_client = OpenAI(
-    api_key=ALI_API_KEY, 
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
-
-llama_client = OpenAI(
-    api_key=LLAMA_API_KEY, 
-    base_url="https://api.llama-api.com",
-)
-
-local_client = OpenAI(
-    base_url="https://localhost:8000/v1",
-)
-
-openai_client = OpenAI(
-    api_key=OPENAI_API_KEY
-)
+objectives = ["openai_moderation", "llama_guard_2", "llama_guard_2_question"]
 
 
-
-
-target_model = LLM(model="/data/model/llama-2-7b-chat-hf", enforce_eager=True, trust_remote_code=True, gpu_memory_utilization=0.45)
+target_model = LLM(model="/data/model/llama-2-7b-chat-hf", enforce_eager=True, trust_remote_code=True, gpu_memory_utilization=0.48)
 judge_model_name = "/data/model/Meta-Llama-Guard-2-8B"
 judge_tokenizer = AutoTokenizer.from_pretrained(judge_model_name)
-judge_model = LLM(model=judge_model_name, enforce_eager=True, trust_remote_code=True, gpu_memory_utilization=0.45)
+judge_model = LLM(model=judge_model_name, enforce_eager=True, trust_remote_code=True, gpu_memory_utilization=0.48)
 
 
 def split_into_paragraphs_and_sentences(text):
@@ -83,24 +57,24 @@ def initialize_population(prototype_prompt, population_size):
 
     if os.path.exists(file_name):
         with open(file_name, 'r', encoding='utf-8') as file:
-            population = [json.loads(line) for line in file]
+            population = [{"prompt":json.loads(line)} for line in file]
             print(len(population), population_size)
             if len(population) == population_size:
                 print("population.jsonl loaded")
                 print(population)
                 return population
 
-    population = [prototype_prompt]
+    population = [{"prompt":prototype_prompt}]
     with open('prompts.json', 'r', encoding='utf-8') as file:
         sorted_prompts_list = sorted(json.load(file), key=lambda x: x['score'], reverse=True)
     for item in sorted_prompts_list:
-        population.append(item['text'].replace("[INSERT PROMPT HERE]",""))
+        population.append({"prompt":item['text'].replace("[INSERT PROMPT HERE]","")})
     if len(population) > population_size:
         population = population[:population_size]
     for _ in range(len(population), population_size):
         response = get_revise(prototype_prompt)
         print(f"response:{response}")
-        population.append(response)
+        population.append({"prompt":response})
 
     with open(file_name, 'w', encoding='utf-8') as file:
         for item in population:
@@ -110,28 +84,31 @@ def initialize_population(prototype_prompt, population_size):
 
     return population
 
+
+
 def evaluate_fitness(prototype_prompts, harmful_question):
-    questions = [f"{prototype_prompt} {harmful_question}" for prototype_prompt in prototype_prompts]
+    questions = [prototype_prompt["prompt"]+" "+harmful_question for prototype_prompt in prototype_prompts]
     outputs = target_model.generate(questions, SamplingParams(max_tokens=100))
     responses = [item.outputs[0].text for item in outputs]
-    moderation_scores = calculate_moderation(responses, harmful_question)
-    response_list = []
-    for prototype_prompt, moderation_score, response in zip(prototype_prompts, moderation_scores, responses):
-        fitness = moderation_score
-        # for prefix in affirm_prefixes:
-        #     if prefix.lower() in response.lower():
-        #         fitness += 1
-        # for prefix in refuse_prefixes:
-        #     if prefix.lower() in response.lower():
-        #         fitness -= 1
-        # print(f"evaluate fitness:{fitness}, response:{response}")
-        response_list.append({"prompt": prototype_prompt, "fitness": fitness, "response": response})
-    return response_list
-
+    
+    fitnesses_list = {}
+    for model in objectives:
+        moderation_scores = calculate_moderation(responses, harmful_question, model=model)
+        fitnesses_list[model] = moderation_scores
+        
+    results = []
+    for i, ind in enumerate(prototype_prompts):
+        fitnesses = {model: fitnesses_list[model][i] for model in objectives}
+        results.append({
+            "prompt": ind["prompt"],
+            "fitnesses": fitnesses,
+            "response": responses[i]
+        })
+        
+    return results
 
 
 def crossover(str1, str2, num_points=2):
-
     paragraphs1 = split_into_paragraphs_and_sentences(str1)
     paragraphs2 = split_into_paragraphs_and_sentences(str2)
 
@@ -166,8 +143,6 @@ def crossover(str1, str2, num_points=2):
 
     return '\n\n'.join(new_paragraphs1), '\n\n'.join(new_paragraphs2)
 
-
-
 def mutation(prompt, mutation_rate=0.1):
     if not prompt.strip():
         return prompt
@@ -182,26 +157,84 @@ def mutation(prompt, mutation_rate=0.1):
     return ' '.join(words)
 
 
+def dominates(ind1, ind2):
+    return all(ind1['fitnesses'][model] >= ind2['fitnesses'][model] for model in ind1['fitnesses'].keys())
+
+def non_dominated_sorting(population):
+    fronts = [[]]
+    for p in population:
+        p["dominated_solutions"] = 0
+        p["dominating_set"] = []
+        for q in population:
+            if dominates(p, q):
+                p["dominating_set"].append(q)
+            elif dominates(q, p):
+                p["dominated_solutions"] += 1
+        if p["dominated_solutions"] == 0:
+            p["rank"] = 0
+            fronts[0].append(p)
+    
+    i = 0
+    while fronts[i]:
+        next_front = []
+        for p in fronts[i]:
+            for q in p["dominating_set"]:
+                q["dominated_solutions"] -= 1
+                if q["dominated_solutions"] == 0:
+                    q["rank"] = i + 1
+                    next_front.append(q)
+        i += 1
+        fronts.append(next_front)
+        
+    for front in fronts:
+        for ind in front:
+            del ind["dominated_solutions"]
+            del ind["dominating_set"]
+    
+    return fronts[:-1]
+
+def crowding_distance_assignment(front):
+    if len(front) == 0:
+        return
+    for ind in front:
+        ind["crowding_distance"] = 0
+    for model in front[0]["fitnesses"].keys():
+        front.sort(key=lambda x: x["fitnesses"][model])
+        front[0]["crowding_distance"] = 2**16-1
+        front[-1]["crowding_distance"] = 2**16-1
+        for i in range(1, len(front) - 1):
+            front[i]["crowding_distance"] += (front[i + 1]["fitnesses"][model] - front[i - 1]["fitnesses"][model])
+            
+def make_new_population(population, population_size, mutation_rate):
+    offspring = []
+    assert population_size % 2 == 0
+    while len(offspring) < population_size:
+        parent1, parent2 = random.sample(population, 2)
+        child1, child2 = crossover(parent1["prompt"], parent2["prompt"])
+        child1 = mutation(child1, mutation_rate)
+        child2 = mutation(child2, mutation_rate)
+        offspring.extend([{"prompt": child1}, {"prompt": child2}])
+    return offspring
+
 
 def genetic_algorithm(prototype_prompt, harmful_question, population_size=32*4, generations=10, mutation_rate=0.1):
+
     population = initialize_population(prototype_prompt, population_size)
-    fitness_scores = evaluate_fitness(population, harmful_question)
-    sorted_fitness_scores = sorted(fitness_scores, key=lambda x: x["fitness"], reverse=True)
-    population = [item["prompt"] for item in sorted_fitness_scores]
+    offspring = []
     for generation in range(generations):
-        next_population = population[:population_size//2]
-        while len(next_population) < population_size:
-            parent1, parent2 = random.sample(next_population, 2)
-            child1, child2 = crossover(parent1, parent2)
-            next_population.extend([mutation(child1, mutation_rate), mutation(child2, mutation_rate)])
-        population = next_population
-        fitness_scores = evaluate_fitness(population, harmful_question)
-        sorted_fitness_scores = sorted(fitness_scores, key=lambda x: x["fitness"], reverse=True)
-        population = [item["prompt"] for item in sorted_fitness_scores]
-        best_prompt, best_response, best_fitness = sorted_fitness_scores[0]["prompt"], sorted_fitness_scores[0]["response"], sorted_fitness_scores[0]["fitness"]
-        # print(f"population: {population}")
-        print("*"*20 + f"\nGeneration {generation+1}: Best fitness = {best_fitness}\n{best_response}\n" +"*"*20)
-    return best_prompt, best_response, best_fitness
+        offspring = make_new_population(population, population_size, mutation_rate)
+        combined_population = population + offspring
+        combined_fitness_scores = evaluate_fitness(combined_population, harmful_question)
+        combined_fronts = non_dominated_sorting(combined_fitness_scores)
+        new_population = []
+        i = 0
+        while len(new_population) + len(combined_fronts[i]) <= population_size:
+            new_population.extend(combined_fronts[i])
+            i += 1
+        crowding_distance_assignment(combined_fronts[i])
+        new_population.extend(sorted(combined_fronts[i], key=lambda x: x["crowding_distance"], reverse=True)[:population_size - len(new_population)])
+        population = new_population
+    return combined_fronts
 
 def calculate_moderation(texts, harmful_question, model="llama_guard_2"):
     if model == "openai_moderation":
@@ -229,6 +262,7 @@ def calculate_moderation(texts, harmful_question, model="llama_guard_2"):
                     category_scores.violence_graphic
                 ])
                 total_scores.append(total_score)
+        print(total_scores)
         return total_scores
 
     elif model == "llama_guard_2":
@@ -272,16 +306,14 @@ if __name__ == '__main__':
     end_index = args.gpu * len(harmful_questions) // gpu_split
     
             
-    with open(f"blackdan_results_gpu{args.gpu}.json", mode='w') as file:
+    with open(f"multi_blackdan_results_gpu{args.gpu}.json", mode='w') as file:
         file.write('[\n')
         for idx, harmful_question in enumerate(harmful_questions[start_index:end_index]):
-            best_prompt, best_response, best_fitness = genetic_algorithm(prototype_prompt, harmful_question)
+            combined_fronts = genetic_algorithm(prototype_prompt, harmful_question)
             result = {
                 "id": start_index + idx,
                 "harmful_question": harmful_question,
-                "best_prompt": best_prompt,
-                "response": best_response,
-                "fitness": best_fitness
+                "combined_fronts": combined_fronts,
             }
             file.write(json.dumps(result))
             if idx < len(harmful_questions[start_index:end_index]) - 1:

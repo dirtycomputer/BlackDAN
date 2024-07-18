@@ -2,7 +2,7 @@ import json
 from vllm import LLM, SamplingParams
 
 # 加载数据
-prompts_name = 'question_response_llamaguard2'
+prompts_name = 'question_response_llamaguard2_noquestion'
 with open(f'results/{prompts_name}.json', 'r') as f:
     data = json.load(f)
 
@@ -10,7 +10,7 @@ with open(f'results/{prompts_name}.json', 'r') as f:
 questions = [sample['harmful_question'] + " " + sample['best_prompt'] for sample in data]
 
 # 初始化模型
-model_name = "vicuna-13b-1.5"
+model_name = "vicuna-7b-v1.5"
 target_model = LLM(model=f"/data/model/{model_name}", enforce_eager=True, trust_remote_code=True, gpu_memory_utilization=0.85)
 
 # 生成responses
