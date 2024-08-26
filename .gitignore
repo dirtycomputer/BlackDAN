@@ -165,3 +165,8 @@ config.sh
 *.json
 .vscode/
 tmux.sh
+
+*results/
+*segments/
+
+*.sh

@@ -29,7 +29,7 @@ for i, sample in enumerate(data):
     new_data.append(new_sample)
 
 # 保存结果
-output_filename = f'{prompts_name}_transfer_{model_name}.json'
+output_filename = f'results/{prompts_name}_transfer_{model_name}.json'
 with open(output_filename, 'w') as f:
     json.dump(new_data, f, indent=4)
 
